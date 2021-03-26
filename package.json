@@ -2,8 +2,10 @@
   "name": "socket-chat-example",
   "version": "0.0.1",
   "description": "my first socket.io app",
+  "type": "module",
   "dependencies": {
     "express": "^4.10.2",
+    "mongoose": "^5.12.2",
     "socket.io": "^1.2.1"
   }
 }

@@ -1,18 +1,41 @@
-var express = require('express');
-var app = express();
-var http = require('http').Server(app);
-var io = require('socket.io')(http);
-var i;
+import express from 'express'
+import socket from 'socket.io'
+import mongoose from 'mongoose'
 
-/**
- * Gestion des requêtes HTTP des utilisateurs en leur renvoyant les fichiers du dossier 'public'
- */
-app.use('/', express.static(__dirname + '/public'));
+mongoose.set('useNewUrlParser', true);
+mongoose.set('useFindAndModify', false);
+mongoose.set('useCreateIndex', true);
+mongoose.connect('mongodb://localhost:27017/test', {useNewUrlParser: true, useUnifiedTopology: true});
+
+const Message = mongoose.model('Message', new mongoose.Schema({
+  text: {
+    type: String,
+    required: true
+  },
+  username: String,
+  date: {
+    type: Date,
+    default: Date.now,
+    index: 1
+  },
+  type: {
+    type: String,
+    enum : ['chat','service', 'login', 'logout'],
+    default: 'chat'
+  },
+}))
+
+// Gestion des requêtes HTTP des utilisateurs en leur renvoyant les fichiers du dossier 'public'
+const app = express().use('/', express.static( 'public'))
+
+// Lancement du serveur en écoutant les connexions arrivant sur le port 3000
+const http = app.listen(3000, () => console.log('Server is listening on *:3000'))
+const io = socket(http)
 
 /**
  * Liste des utilisateurs connectés
  */
-var users = [];
+const users = new Array();
 
 /**
  * Historique des messages
@@ -24,7 +47,8 @@ var messages = [];
  */
 var typingUsers = [];
 
-io.on('connection', function (socket) {
+io.on('connection', async socket => {
+  console.log('connection')
 
   /**
    * Utilisateur connecté à la socket
@@ -34,30 +58,29 @@ io.on('connection', function (socket) {
   /**
    * Emission d'un événement "user-login" pour chaque utilisateur connecté
    */
-  for (i = 0; i < users.length; i++) {
-    socket.emit('user-login', users[i]);
-  }
+  users.forEach(user =>  socket.emit('user-login', user))
 
-  /** 
+  /**
    * Emission d'un événement "chat-message" pour chaque message de l'historique
    */
-  for (i = 0; i < messages.length; i++) {
-    if (messages[i].type === 'chat-message') {
-      socket.emit('chat-message', messages[i]);
-    } else {
-      socket.emit('service-message', messages[i]);
-    }
-  }
+  // TODO check if user is connected (redis) and skip this part
+  const dbMessages = await Message.find({}).sort({date: -1}).limit(50)
+  dbMessages.reverse().forEach(message => {
+    if (message.type === 'chat') socket.emit('chat-message', message)
+    else socket.emit('service', message)
+  })
+
 
   /**
    * Déconnexion d'un utilisateur
    */
-  socket.on('disconnect', function () {
+  socket.on('disconnect', async () => {
+    console.log('disconnect')
     if (loggedUser !== undefined) {
       // Broadcast d'un 'service-message'
       var serviceMessage = {
         text: 'User "' + loggedUser.username + '" disconnected',
-        type: 'logout'
+        type: 'logout',
       };
       socket.broadcast.emit('service-message', serviceMessage);
       // Suppression de la liste des connectés
@@ -66,7 +89,7 @@ io.on('connection', function (socket) {
         users.splice(userIndex, 1);
       }
       // Ajout du message à l'historique
-      messages.push(serviceMessage);
+      await Message.create(serviceMessage)
       // Emission d'un 'user-logout' contenant le user
       io.emit('user-logout', loggedUser);
       // Si jamais il était en train de saisir un texte, on l'enlève de la liste
@@ -77,18 +100,12 @@ io.on('connection', function (socket) {
     }
   });
 
-  /**
+  /**oc
    * Connexion d'un utilisateur via le formulaire :
    */
-  socket.on('user-login', function (user, callback) {
-    // Vérification que l'utilisateur n'existe pas
-    var userIndex = -1;
-    for (i = 0; i < users.length; i++) {
-      if (users[i].username === user.username) {
-        userIndex = i;
-      }
-    }
-    if (user !== undefined && userIndex === -1) { // S'il est bien nouveau
+  socket.on('user-login', async (user, callback) => {
+    console.log('user-login')
+    if (user !== undefined && !users.some(value => value.username === user.username)) { // S'il est bien nouveau
       // Sauvegarde de l'utilisateur et ajout à la liste des connectés
       loggedUser = user;
       users.push(loggedUser);
@@ -96,14 +113,20 @@ io.on('connection', function (socket) {
       var userServiceMessage = {
         text: 'You logged in as "' + loggedUser.username + '"',
         type: 'login'
-      };
+      }
+
       var broadcastedServiceMessage = {
         text: 'User "' + loggedUser.username + '" logged in',
         type: 'login'
-      };
-      socket.emit('service-message', userServiceMessage);
-      socket.broadcast.emit('service-message', broadcastedServiceMessage);
-      messages.push(broadcastedServiceMessage);
+      }
+
+      socket.emit('service-message', userServiceMessage)
+      socket.broadcast.emit('service-message', broadcastedServiceMessage)
+
+      await Message.create(broadcastedServiceMessage)
+
+
+
       // Emission de 'user-login' et appel du callback
       io.emit('user-login', loggedUser);
       callback(true);
@@ -115,17 +138,20 @@ io.on('connection', function (socket) {
   /**
    * Réception de l'événement 'chat-message' et réémission vers tous les utilisateurs
    */
-  socket.on('chat-message', function (message) {
-    // On ajoute le username au message et on émet l'événement
-    message.username = loggedUser.username;
-    // On assigne le type "message" à l'objet
-    message.type = 'chat-message';
-    io.emit('chat-message', message);
+  socket.on('chat-message', async (message) => {
+    console.log('chat-message')
     // Sauvegarde du message
-    messages.push(message);
-    if (messages.length > 150) {
-      messages.splice(0, 1);
-    }
+    await Message.create({
+      text: message.text,
+      username: loggedUser.username
+    })
+
+    // emmition du message
+    io.emit('chat-message', {
+      text: message.text,
+      username: loggedUser.username,
+      type: 'chat-message'
+    })
   });
 
   /**
@@ -133,6 +159,7 @@ io.on('connection', function (socket) {
    * L'utilisateur commence à saisir son message
    */
   socket.on('start-typing', function () {
+    console.log('start-typing')
     // Ajout du user à la liste des utilisateurs en cours de saisie
     if (typingUsers.indexOf(loggedUser) === -1) {
       typingUsers.push(loggedUser);
@@ -145,6 +172,7 @@ io.on('connection', function (socket) {
    * L'utilisateur a arrêter de saisir son message
    */
   socket.on('stop-typing', function () {
+    console.log('stop-typing')
     var typingUserIndex = typingUsers.indexOf(loggedUser);
     if (typingUserIndex !== -1) {
       typingUsers.splice(typingUserIndex, 1);
@@ -153,9 +181,4 @@ io.on('connection', function (socket) {
   });
 });
 
-/**
- * Lancement du serveur en écoutant les connexions arrivant sur le port 3000
- */
-http.listen(3000, function () {
-  console.log('Server is listening on *:3000');
-});
+
