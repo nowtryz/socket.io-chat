@@ -3,9 +3,12 @@ var app = express();
 var http = require('http').Server(app);
 var io = require('socket.io')(http);
 var i;
+var redis = require('redis');
+var client = redis.createClient(); //creates a new client
+
 
 /**
- * Gestion des requêtes HTTP des utilisateurs en leur renvoyant les fichiers du dossier 'public'
+ * Gestion des equêtes HTTP des utilisateurs en leur renvoyant les fichiers du dossier 'public'
  */
 app.use('/', express.static(__dirname + '/public'));
 
@@ -64,6 +67,11 @@ io.on('connection', function (socket) {
       var userIndex = users.indexOf(loggedUser);
       if (userIndex !== -1) {
         users.splice(userIndex, 1);
+        client.lrem("users", userIndex, loggedUser.username, function (err,reply){
+          console.log(loggedUser.username  + " c'est déconnecté");
+          
+  
+        })
       }
       // Ajout du message à l'historique
       messages.push(serviceMessage);
@@ -92,6 +100,13 @@ io.on('connection', function (socket) {
       // Sauvegarde de l'utilisateur et ajout à la liste des connectés
       loggedUser = user;
       users.push(loggedUser);
+
+      client.rpush("users", loggedUser.username, function (err,reply){
+        console.log(loggedUser.username  + " c'est connecté");
+        console.log(reply + " utilisateurs connectés")
+      })
+
+
       // Envoi et sauvegarde des messages de service
       var userServiceMessage = {
         text: 'You logged in as "' + loggedUser.username + '"',
