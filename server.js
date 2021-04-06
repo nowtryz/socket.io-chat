@@ -6,6 +6,7 @@ import redis from 'redis'
 mongoose.set('useNewUrlParser', true)
 mongoose.set('useFindAndModify', false)
 mongoose.set('useCreateIndex', true)
+// connect to replicaset
 mongoose.connect('mongodb://localhost:27017/test', {useNewUrlParser: true, useUnifiedTopology: true})
 
 const client = redis.createClient() //creates a new client
@@ -40,7 +41,7 @@ const io = socket(http)
 /**
  * Liste des utilisateurs en train de saisir un message
  */
-var typingUsers = [];
+const typingUsers = [];
 
 const initUser = async socket => {
   /**
@@ -53,7 +54,6 @@ const initUser = async socket => {
   /**
    * Emission d'un événement "chat-message" pour chaque message de l'historique
    */
-  // TODO check if user is connected (redis) and skip this part
   const dbMessages = await Message.find({}).sort({date: -1}).limit(50)
   dbMessages.reverse().forEach(message => {
     if (message.type === 'chat') socket.emit('chat-message', message)
@@ -76,22 +76,21 @@ io.on('connection', async socket => {
   socket.on('disconnect', async () => {
     if (loggedUser !== undefined) {
       // Broadcast d'un 'service-message'
-      var serviceMessage = {
+      const serviceMessage = {
         text: 'User "' + loggedUser.username + '" disconnected',
         type: 'logout',
       };
       socket.broadcast.emit('service-message', serviceMessage);
       // Suppression de la liste des connectés
-      client.lrem("users", userIndex, loggedUser.username, function (err,reply){
-        console.log(loggedUser.username  + " s'est déconnecté")
-      })
+      client.lrem("users", loggedUser.username, () => console.log(loggedUser.username  + " s'est déconnecté"))
 
       // Ajout du message à l'historique
       await Message.create(serviceMessage)
       // Emission d'un 'user-logout' contenant le user
       io.emit('user-logout', loggedUser);
       // Si jamais il était en train de saisir un texte, on l'enlève de la liste
-      var typingUserIndex = typingUsers.indexOf(loggedUser);
+
+      const typingUserIndex = typingUsers.indexOf(loggedUser);
       if (typingUserIndex !== -1) {
         typingUsers.splice(typingUserIndex, 1);
       }
@@ -113,7 +112,7 @@ io.on('connection', async socket => {
         // Sauvegarde de l'utilisateur et ajout à la liste des connectés
         loggedUser = user
 
-        client.rpush("users", loggedUser.username, function (err,reply){
+        client.rpush("users", loggedUser.username, (err, reply) => {
           console.log(loggedUser.username  + " s'est connecté");
           console.log(reply + " utilisateurs connectés")
         })
@@ -151,13 +150,13 @@ io.on('connection', async socket => {
       username: loggedUser.username
     })
 
-    // emmition du message
+    // emission du message
     io.emit('chat-message', {
       text: message.text,
       username: loggedUser.username,
       type: 'chat-message'
     })
-  });
+  })
 
   /**
    * Réception de l'événement 'start-typing'
@@ -165,23 +164,41 @@ io.on('connection', async socket => {
    */
   socket.on('start-typing', function () {
     // Ajout du user à la liste des utilisateurs en cours de saisie
-    if (typingUsers.indexOf(loggedUser) === -1) {
-      typingUsers.push(loggedUser);
-    }
-    io.emit('update-typing', typingUsers);
-  });
+    if (!typingUsers.includes(loggedUser)) typingUsers.push(loggedUser)
+    io.emit('update-typing', typingUsers)
+  })
 
   /**
    * Réception de l'événement 'stop-typing'
    * L'utilisateur a arrêter de saisir son message
    */
   socket.on('stop-typing', function () {
-    var typingUserIndex = typingUsers.indexOf(loggedUser);
+    const typingUserIndex = typingUsers.indexOf(loggedUser);
     if (typingUserIndex !== -1) {
       typingUsers.splice(typingUserIndex, 1);
     }
     io.emit('update-typing', typingUsers);
-  });
-});
+  })
+})
 
-
+app.get('/stats', async (req,res) => {
+  const chatty = await Message.aggregate([
+    {
+      $match: {
+        username: { $ne : null }
+      },
+    },
+    {
+      $group: {
+        _id: '$username',
+        count: { $sum: 1 }
+      }
+    },
+    {
+      $sort: {
+        count: -1
+      }
+    }
+  ])
+  res.json({chatty})
+})
