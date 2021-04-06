@@ -65,7 +65,7 @@ io.on('connection', async socket => {
   /**
    * Utilisateur connecté à la socket
    */
-  var loggedUser;
+  let loggedUser
 
   initUser(socket).catch(console.error)
 
@@ -79,15 +79,16 @@ io.on('connection', async socket => {
       const serviceMessage = {
         text: 'User "' + loggedUser.username + '" disconnected',
         type: 'logout',
-      };
-      socket.broadcast.emit('service-message', serviceMessage);
+      }
+
+      socket.broadcast.emit('service-message', serviceMessage)
       // Suppression de la liste des connectés
       client.lrem("users", loggedUser.username, () => console.log(loggedUser.username  + " s'est déconnecté"))
 
       // Ajout du message à l'historique
       await Message.create(serviceMessage)
       // Emission d'un 'user-logout' contenant le user
-      io.emit('user-logout', loggedUser);
+      io.emit('user-logout', loggedUser)
       // Si jamais il était en train de saisir un texte, on l'enlève de la liste
 
       const typingUserIndex = typingUsers.indexOf(loggedUser);
@@ -191,6 +192,7 @@ app.get('/stats', async (req,res) => {
     {
       $group: {
         _id: '$username',
+        username: { $first: '$username' },
         count: { $sum: 1 }
       }
     },
